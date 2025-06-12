@@ -75,7 +75,8 @@ void num_to_string(unsigned long num, char *buf)
 void calculate_distances(unsigned long duration, unsigned long *height)
 {
     unsigned long cm = duration / 58; // Convert duration (µs) to cm using speed of sound (340 m/s)
-    *height          = SENSOR_DISTANCE - cm;
+    // *height          = SENSOR_DISTANCE - cm;
+    *height = cm;
 }
 /*==================================== */
 
@@ -186,14 +187,16 @@ int send_at_command(char *command)
 {
     send_string(command);
     char response[10];
-    read_response(response, 10, 5000); // 5s timeout
+    read_response(response, 10, 1000); // 1s timeout
+    // Clear LCD
     // Check for "OK"
-    for (int k = 0; k < 9; k++) {
-        if (response[k] == 'O' && response[k + 1] == 'K') {
-            return 1; // Success
-        }
-    }
-    return 0; // Failure, no SMS sent
+    // for (int k = 0; k < 9; k++) {
+    //     if (response[k] == 'O' && response[k + 1] == 'K') {
+    //         return 1; // Success
+    //     }
+    // }
+    // return 0; // Failure, no SMS sent
+    return 1;
 }
 
 void send_sms(char *number, char *message)
@@ -217,18 +220,31 @@ void send_sms(char *number, char *message)
 
 void init_sim(void)
 {
-    sim_init_success = send_at_command("AT\r") &&
-                       send_at_command("ATE0\r") &&
-                       send_at_command("AT+CPIN?\r") &&
-                       send_at_command("AT+CSQ\r") &&
-                       send_at_command("AT+CGATT=1\r") &&
-                       send_at_command("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"\r") &&
-                       send_at_command("AT+SAPBR=3,1,\"APN\",\"ntnet\"\r") &&
-                       send_at_command("AT+SAPBR=1,1\r") &&
-                       send_at_command("AT+SAPBR=2,1\r") &&
-                       send_at_command("AT+HTTPINIT\r") &&
-                       send_at_command("AT+HTTPSSL=1\r") &&
-                       send_at_command("AT+HTTPPARA=\"CID\",1\r");
+
+    // sim_init_success = send_at_command("AT\r") &&
+    //                    send_at_command("ATE0\r") &&
+    //                    send_at_command("AT+CPIN?\r") &&
+    //                    send_at_command("AT+CSQ\r") &&
+    //                    send_at_command("AT+CGATT=1\r") &&
+    //                    send_at_command("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"\r") &&
+    //                    send_at_command("AT+SAPBR=3,1,\"APN\",\"ntnet\"\r") &&
+    //                    send_at_command("AT+SAPBR=1,1\r") &&
+    //                    send_at_command("AT+SAPBR=2,1\r") &&
+    //                    send_at_command("AT+HTTPINIT\r") &&
+    //                    send_at_command("AT+HTTPSSL=1\r") &&
+    //                    send_at_command("AT+HTTPPARA=\"CID\",1\r");
+    send_at_command("AT\r");
+    send_at_command("ATE0\r");
+    send_at_command("AT+CPIN?\r");
+    send_at_command("AT+CSQ\r");
+    send_at_command("AT+CGATT=1\r");
+    send_at_command("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"\r");
+    send_at_command("AT+SAPBR=3,1,\"APN\",\"ntnet\"\r");
+    send_at_command("AT+SAPBR=1,1\r");
+    send_at_command("AT+SAPBR=2,1\r");
+    send_at_command("AT+HTTPINIT\r");
+    send_at_command("AT+HTTPSSL=1\r");
+    send_at_command("AT+HTTPPARA=\"CID\",1\r");
 }
 
 void send_http_get(unsigned long duration)
@@ -244,7 +260,6 @@ void send_http_get(unsigned long duration)
     send_string("&duration=");
     send_string(duration_str);
     send_string("\"\r");
-    if (!send_at_command("AT+HTTPPARA=\"URL\",\"")) return; // Check only the command part
     // Perform GET request
     if (!send_at_command("AT+HTTPACTION=0\r")) return;
 }
