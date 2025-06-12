@@ -1,5 +1,4 @@
 #include <8051.h>
-#include <string.h>
 
 // Pin definitions
 #define TRIG_PIN   P1_0 // Trigger pin on P1.0
@@ -10,9 +9,11 @@
 #define LCD_OUTPUT P2
 
 __code char API_URL[] = "https://flood-monitoring-lilac.vercel.app/api/flood-data?";
-__code char code[]    = "pswd";        // Secret code required to access the api
-#define SENSOR_DISTANCE 2000           // Distance between River base and Sensor Placement (in centimeters)
-#define PHONE_NUMBER    "+64123456789" // Destination Phone Number to send SMS to
+__code char code[]    = "pswd";          // Secret code required to access the api
+#define SENSOR_DISTANCE 2000             // Distance between River base and Sensor Placement (in centimeters)
+#define PHONE_NUMBER_B  "+9779848015700" // For flood alerts
+
+unsigned char sim_init_success = 0;
 
 /* ================== HELPER FUNCTIONS ================== */
 unsigned long measure_distance(void)
@@ -39,12 +40,9 @@ unsigned long measure_distance(void)
 void delay_us(unsigned int us)
 {
     while (us--) {
-        __asm nop
-            __endasm;
-        __asm nop
-            __endasm;
-        __asm nop
-            __endasm;
+        __asm nop __endasm;
+        __asm nop __endasm;
+        __asm nop __endasm;
     }
 }
 
@@ -78,7 +76,6 @@ void calculate_distances(unsigned long duration, unsigned long *height)
 {
     unsigned long cm = duration / 58; // Convert duration (µs) to cm using speed of sound (340 m/s)
     *height          = SENSOR_DISTANCE - cm;
-    // *height          = cm / 100;
 }
 /*==================================== */
 
@@ -94,7 +91,6 @@ void trigger_sensor(void)
 /*==================================== */
 
 /* ================== UART SERIAL COMMUNICATION MODULE ================== */
-
 void init_serial(void)
 {
     SCON = 0x50; // Mode 1, 8-bit UART, enable receiver
@@ -120,9 +116,6 @@ void send_string(char *str)
 /*==================================== */
 
 /* ================== LCD MODULE ================== */
-
-/* ================== LCD MODULE ================== */
-
 void lcd_command(unsigned char cmd)
 {
     LCD_RS     = 0; // Command mode
@@ -176,60 +169,73 @@ void lcd_display_height(unsigned long height)
 /*==================================== */
 
 /* ================== SIM MODULE CODE ================== */
+void read_response(char *buf, int buf_size, unsigned int timeout_ms)
+{
+    int i = 0;
+    for (unsigned int j = 0; j < timeout_ms / 10; j++) { // Timeout in ms
+        delay_ms(10);
+        while (RI && i < buf_size - 1) {
+            buf[i++] = SBUF;
+            RI       = 0;
+        }
+    }
+    buf[i] = '\0';
+}
+
+int send_at_command(char *command)
+{
+    send_string(command);
+    char response[10];
+    read_response(response, 10, 5000); // 5s timeout
+    // Check for "OK"
+    for (int k = 0; k < 9; k++) {
+        if (response[k] == 'O' && response[k + 1] == 'K') {
+            return 1; // Success
+        }
+    }
+    return 0; // Failure, no SMS sent
+}
+
+void send_sms(char *number, char *message)
+{
+    // Set SMS text mode
+    if (!send_at_command("AT+CMGF=1\r")) return;
+    delay_ms(500);
+    // Set recipient
+    send_string("AT+CMGS=\"");
+    send_string(number);
+    send_string("\"\r");
+    delay_ms(500);
+    // Send message
+    send_string(message);
+    // Send Ctrl+Z
+    SBUF = 0x1A;
+    while (!TI);
+    TI = 0;
+    delay_ms(2000);
+}
 
 void init_sim(void)
 {
-    // Test SIM900D communication
-    send_string("AT\r");
-    delay_ms(200); // Wait for "OK" response
-
-    // Set command echo off (optional, for cleaner responses)
-    send_string("ATE0\r");
-    delay_ms(300);
-
-    // Check SIM card status
-    send_string("AT+CPIN?\r");
-    delay_ms(300);
-
-    send_string("AT+CSQ\r");
-    delay_ms(300);
-    // Attach to GPRS service
-    send_string("AT+CGATT=1\r");
-    delay_ms(1000);
-
-    // Configure bearer profile
-    send_string("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"\r");
-    delay_ms(500);
-    send_string("AT+SAPBR=3,1,\"APN\",\"WWW.vodafone.net.nz\"\r"); // Replace with your APN
-    delay_ms(500);
-
-    // Open bearer
-    send_string("AT+SAPBR=1,1\r");
-    delay_ms(200);
-
-    send_string("AT+SAPBR=2,1\r");
-    delay_ms(200);
-
-    // Initialize HTTP service
-    send_string("AT+HTTPINIT\r");
-    delay_ms(1000);
-
-    // Enable HTTPS
-    send_string("AT+HTTPSSL=1\r");
-    delay_ms(500);
-
-    // Set HTTP parameters
-    send_string("AT+HTTPPARA=\"CID\",1\r");
-    delay_ms(500);
+    sim_init_success = send_at_command("AT\r") &&
+                       send_at_command("ATE0\r") &&
+                       send_at_command("AT+CPIN?\r") &&
+                       send_at_command("AT+CSQ\r") &&
+                       send_at_command("AT+CGATT=1\r") &&
+                       send_at_command("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"\r") &&
+                       send_at_command("AT+SAPBR=3,1,\"APN\",\"ntnet\"\r") &&
+                       send_at_command("AT+SAPBR=1,1\r") &&
+                       send_at_command("AT+SAPBR=2,1\r") &&
+                       send_at_command("AT+HTTPINIT\r") &&
+                       send_at_command("AT+HTTPSSL=1\r") &&
+                       send_at_command("AT+HTTPPARA=\"CID\",1\r");
 }
 
 void send_http_get(unsigned long duration)
 {
-    char duration_str[15];
-
-    // Construct URL: API_URL + duration
+    if (!sim_init_success) return;
+    char duration_str[10];
     num_to_string(duration, duration_str);
-
     // Set HTTP URL
     send_string("AT+HTTPPARA=\"URL\",\"");
     send_string(API_URL);
@@ -238,42 +244,14 @@ void send_http_get(unsigned long duration)
     send_string("&duration=");
     send_string(duration_str);
     send_string("\"\r");
-
-    delay_ms(500);
-
+    if (!send_at_command("AT+HTTPPARA=\"URL\",\"")) return; // Check only the command part
     // Perform GET request
-    send_string("AT+HTTPACTION=0\r");
-
-    // In real application, we don't need any response, just need to trigger the endpoint
-    delay_ms(5000); // Wait for response
-
-    // Read response (for debugging, visible in virtual terminal)
-    send_string("AT+HTTPREAD\r");
-    delay_ms(1000);
+    if (!send_at_command("AT+HTTPACTION=0\r")) return;
 }
 
 void send_flood_alert_msg()
 {
-    // Set SMS text mode
-    send_string("AT+CMGF=1\r"); // Set SMS to text mode
-    delay_ms(500);
-
-    // Set the recipient phone number using the defined constant
-    send_string("AT+CMGS=\"");
-    send_string(PHONE_NUMBER);
-    send_string("\"\r");
-    delay_ms(500);
-
-    // Send the alert message
-    send_string("FLOOD ALERT! Water level has exceeded 1000cm!\r");
-    delay_ms(200);
-
-    // Send Ctrl+Z (0x1A) to indicate end of message
-    SBUF = 0x1A;
-    while (!TI);
-    TI = 0;
-
-    delay_ms(2000); // Give time for SMS to be sent
+    send_sms(PHONE_NUMBER_B, "FLOOD ALERT! Water level has exceeded 1000cm!");
 }
 /*==================================== */
 
@@ -281,25 +259,24 @@ void main(void)
 {
     unsigned long duration, height;
     init_serial();
-    lcd_init();                // Initialize LCD
-    static int alert_sent = 0; // Flag to track if alert was already sent
-
-    EA = 0; // Disable interrupts to avoid conflicts
+    lcd_init();
+    static int alert_sent = 0;
+    EA                    = 0; // Disable interrupts
     init_sim();
     while (1) {
         trigger_sensor();
         duration = measure_distance();
         calculate_distances(duration, &height);
-        lcd_display_height(height); // Display height on LCD
-
+        lcd_display_height(height);
         if (height > 1000 && !alert_sent) {
             send_flood_alert_msg();
-            alert_sent = 1; // Set flag to prevent repeated alerts
+            alert_sent = 1;
         } else if (height <= 1000) {
-            alert_sent = 0; // Reset flag when water recedes
+            alert_sent = 0;
         }
-        send_http_get(duration); // Send duration to API
-
+        if (sim_init_success) {
+            send_http_get(duration);
+        }
         delay_ms(1000);
     }
 }
